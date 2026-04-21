@@ -138,6 +138,15 @@ th {
   color: #ef4444;
 }
 
+.low-confidence-row {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.confidence-low {
+  color: #f87171;
+  font-weight: 600;
+}
+
 .editor-layout {
   display: grid;
   gap: 0.75rem;

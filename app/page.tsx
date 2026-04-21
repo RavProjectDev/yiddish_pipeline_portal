@@ -18,6 +18,8 @@ type StatusResponse = {
     options: {
       nSegments: number;
       whisperModel: string;
+      transcriptionProvider?: string;
+      cloudProvider?: string;
       startFromSegment: number;
     };
   };
@@ -36,14 +38,36 @@ type SegmentEditorRow = {
   timestamp: string;
   finalSrtText: string;
   yiddishText: string;
+  confidence?: number;
 };
 
 const STEP_ORDER: Array<keyof SegmentState> = ["audio", "sofer", "translate", "whisper", "align"];
+const PROVIDER_MODEL_OPTIONS: Record<string, string[]> = {
+  local: ["large-v3", "large-v3-turbo"],
+  cloud: []
+};
+const CLOUD_PROVIDER_MODEL_OPTIONS: Record<string, string[]> = {
+  openai: ["whisper-1"],
+  groq: ["whisper-large-v3"]
+};
+const LOW_CONFIDENCE_THRESHOLD = 0.7;
+
+function formatConfidence(value: number | undefined) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "n/a";
+  }
+  return value.toFixed(2);
+}
 
 export default function Page() {
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [nSegments, setNSegments] = useState(50);
-  const [whisperModel, setWhisperModel] = useState("large-v3");
+  const transcriptionProvider = "cloud";
+  const cloudProvider = "groq";
+  const whisperModel =
+    (transcriptionProvider === "cloud"
+      ? (CLOUD_PROVIDER_MODEL_OPTIONS[cloudProvider] ?? CLOUD_PROVIDER_MODEL_OPTIONS.openai)
+      : (PROVIDER_MODEL_OPTIONS.local ?? ["large-v3"]))[0] ?? "large-v3";
   const [startFromSegment, setStartFromSegment] = useState(0);
   const [existingJobId, setExistingJobId] = useState("");
   const [jobId, setJobId] = useState("");
@@ -171,6 +195,10 @@ export default function Page() {
         formData.append("audio", audioFile);
       }
       formData.append("nSegments", String(nSegments));
+      formData.append("transcriptionProvider", transcriptionProvider);
+      if (transcriptionProvider === "cloud") {
+        formData.append("cloudProvider", cloudProvider);
+      }
       formData.append("whisperModel", whisperModel);
       formData.append("startFromSegment", String(startFromSegment));
       if (existingJobId.trim()) {
@@ -302,10 +330,6 @@ export default function Page() {
                 value={nSegments}
                 onChange={(event) => setNSegments(Number(event.target.value))}
               />
-            </label>
-            <label>
-              Whisper Model
-              <input value={whisperModel} onChange={(event) => setWhisperModel(event.target.value)} />
             </label>
             <label>
               Start From Segment
@@ -452,6 +476,9 @@ export default function Page() {
                     {isEditorSaving ? "Saving..." : "Save Edits"}
                   </button>
                 </div>
+                <p style={{ margin: "0.5rem 0 0" }}>
+                  Rows with confidence below {LOW_CONFIDENCE_THRESHOLD.toFixed(2)} are highlighted for review.
+                </p>
                 <div style={{ marginTop: "0.5rem" }}>
                   <p style={{ margin: "0 0 0.35rem" }}>Segment Audio</p>
                   <audio
@@ -471,15 +498,34 @@ export default function Page() {
                         <tr>
                           <th>Local Cue</th>
                           <th>Timestamp</th>
+                          <th>Confidence</th>
                           <th>Merged Translation</th>
                           <th>Whisper Original</th>
                         </tr>
                       </thead>
                       <tbody>
                         {editorRows.map((row) => (
-                          <tr key={row.cueIndex}>
+                          <tr
+                            key={row.cueIndex}
+                            className={
+                              typeof row.confidence === "number" &&
+                              row.confidence < LOW_CONFIDENCE_THRESHOLD
+                                ? "low-confidence-row"
+                                : undefined
+                            }
+                          >
                             <td>{row.cueIndex}</td>
                             <td className="mono">{row.timestamp}</td>
+                            <td
+                              className={
+                                typeof row.confidence === "number" &&
+                                row.confidence < LOW_CONFIDENCE_THRESHOLD
+                                  ? "confidence-low"
+                                  : "mono"
+                              }
+                            >
+                              {formatConfidence(row.confidence)}
+                            </td>
                             <td>
                               <textarea
                                 value={row.finalSrtText}

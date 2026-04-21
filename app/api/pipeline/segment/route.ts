@@ -16,6 +16,7 @@ type SegmentEditorRow = {
   timestamp: string;
   finalSrtText: string;
   yiddishText: string;
+  confidence?: number;
 };
 
 function parseSegmentIndex(value: string | null) {
@@ -45,7 +46,8 @@ function toEditorRows(alignment: AlignmentFile): SegmentEditorRow[] {
         cueIndex: key,
         timestamp: cue.timestamp ?? "",
         finalSrtText: Array.isArray(cue.gold_words) ? cue.gold_words.join(" ") : "",
-        yiddishText: cue.srt_text ?? ""
+        yiddishText: cue.srt_text ?? "",
+        confidence: typeof cue.confidence === "number" ? cue.confidence : undefined
       };
     });
 }
@@ -79,12 +81,16 @@ async function buildEditorRows(
 
   const raw = await fs.readFile(whisperPath, "utf8");
   const cues = parseSrt(raw);
-  return cues.map((cue) => ({
-    cueIndex: cue.index,
-    timestamp: cue.timestamp,
-    finalSrtText: (alignment.word_alignment?.[cue.index] ?? []).join(" "),
-    yiddishText: cue.text
-  }));
+  return cues.map((cue) => {
+    const mergedCue = alignment.merged_srt?.[cue.index];
+    return {
+      cueIndex: cue.index,
+      timestamp: cue.timestamp,
+      finalSrtText: (alignment.word_alignment?.[cue.index] ?? []).join(" "),
+      yiddishText: cue.text,
+      confidence: typeof mergedCue?.confidence === "number" ? mergedCue.confidence : undefined
+    };
+  });
 }
 
 async function readSoferText(jobId: string, segmentIndex: number) {
@@ -160,7 +166,13 @@ export async function PUT(request: NextRequest) {
     alignment.merged_srt[cueIndex] = {
       timestamp: String(row.timestamp ?? existingCue?.timestamp ?? ""),
       srt_text: String(row.yiddishText ?? existingCue?.srt_text ?? ""),
-      gold_words: wordsFromText(String(row.finalSrtText ?? existingCue?.gold_words?.join(" ") ?? ""))
+      gold_words: wordsFromText(String(row.finalSrtText ?? existingCue?.gold_words?.join(" ") ?? "")),
+      confidence:
+        typeof row.confidence === "number"
+          ? row.confidence
+          : typeof existingCue?.confidence === "number"
+            ? existingCue.confidence
+            : undefined
     };
     const cue = alignment.merged_srt[cueIndex];
     cue.timestamp = String(row.timestamp ?? cue.timestamp ?? "");

@@ -16,8 +16,13 @@ export type PipelineState = {
 export type PipelineOptions = {
   nSegments: number;
   whisperModel: string;
+  transcriptionProvider?: TranscriptionProvider;
+  cloudProvider?: CloudTranscriptionProvider;
   startFromSegment: number;
 };
+
+export type TranscriptionProvider = "local" | "cloud";
+export type CloudTranscriptionProvider = "openai" | "groq";
 
 export type WhisperCue = {
   index: string;
@@ -30,6 +35,7 @@ export type MergedCue = {
   srt_text: string;
   gold_words: string[];
   sofer_yiddish_text?: string;
+  confidence?: number;
 };
 
 export type AlignmentFile = {

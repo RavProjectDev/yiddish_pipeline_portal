@@ -31,6 +31,51 @@ function wordsFromTranslation(text: string) {
   return text.split(/\s+/g).filter(Boolean);
 }
 
+type ParsedAlignment = {
+  indexAlignment: Record<string, number[]>;
+  confidenceByCue: Record<string, number | undefined>;
+};
+
+function normalizeConfidence(value: unknown) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return Math.min(1, Math.max(0, parsed));
+}
+
+function parseAlignmentPayload(raw: string): ParsedAlignment {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Alignment payload must be a JSON object");
+  }
+
+  const payload = parsed as Record<string, unknown>;
+  const indexAlignment: Record<string, number[]> = {};
+  const confidenceByCue: Record<string, number | undefined> = {};
+
+  for (const [cueIndex, value] of Object.entries(payload)) {
+    if (Array.isArray(value)) {
+      indexAlignment[cueIndex] = value.filter(
+        (idx): idx is number => Number.isInteger(idx)
+      );
+      continue;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`Invalid alignment entry for cue ${cueIndex}`);
+    }
+
+    const entry = value as Record<string, unknown>;
+    const indexesRaw = Array.isArray(entry.indexes) ? entry.indexes : [];
+    indexAlignment[cueIndex] = indexesRaw.filter(
+      (idx): idx is number => Number.isInteger(idx)
+    );
+    confidenceByCue[cueIndex] = normalizeConfidence(entry.confidence);
+  }
+
+  return { indexAlignment, confidenceByCue };
+}
+
 async function appendLog(filePath: string, data: string) {
   await fs.appendFile(filePath, `${data}\n`, "utf8");
 }
@@ -148,6 +193,7 @@ async function runAlignStep(segmentIndex: number, segmentDir: string, logsDir: s
   }
 
   let indexAlignment: Record<string, number[]> = {};
+  let confidenceByCue: Record<string, number | undefined> = {};
   let parsedOk = false;
   for (let attempt = 0; attempt < MAX_ALIGN_RETRIES; attempt += 1) {
     try {
@@ -155,7 +201,9 @@ async function runAlignStep(segmentIndex: number, segmentDir: string, logsDir: s
         goldWords,
         cues.map((cue) => ({ index: cue.index, text: cue.text }))
       );
-      indexAlignment = JSON.parse(alignResult.raw) as Record<string, number[]>;
+      const parsed = parseAlignmentPayload(alignResult.raw);
+      indexAlignment = parsed.indexAlignment;
+      confidenceByCue = parsed.confidenceByCue;
       parsedOk = true;
       break;
     } catch (error) {
@@ -189,7 +237,8 @@ async function runAlignStep(segmentIndex: number, segmentDir: string, logsDir: s
     mergedSrt[key] = {
       timestamp: cue?.timestamp ?? "",
       srt_text: cue?.text ?? "",
-      gold_words: wordAlignment[key]
+      gold_words: wordAlignment[key],
+      confidence: confidenceByCue[key]
     };
   }
 
@@ -218,6 +267,7 @@ async function runMerge(jobId: string, nSegments: number, segmentLengthSeconds: 
     local_index: string;
     timestamp: string;
     text: string;
+    confidence?: number;
   }> = [];
 
   for (let segment = 0; segment < nSegments; segment += 1) {
@@ -241,7 +291,8 @@ async function runMerge(jobId: string, nSegments: number, segmentLengthSeconds: 
         segment,
         local_index: key,
         timestamp,
-        text
+        text,
+        confidence: cue.confidence
       });
       globalIndex += 1;
     }
@@ -277,7 +328,7 @@ export async function runPipelineJob(jobId: string) {
   const configPath = getJobConfigPath(jobId);
   const config = await readJsonFile<PipelineConfig>(configPath);
   const { options } = config;
-  const { nSegments, startFromSegment, whisperModel } = options;
+  const { nSegments, startFromSegment, whisperModel, transcriptionProvider, cloudProvider } = options;
   const duration = await getAudioDurationSeconds(config.sourceAudioPath);
   const segmentLength = duration / nSegments;
 
@@ -393,7 +444,13 @@ export async function runPipelineJob(jobId: string) {
     try {
       if (segmentState.whisper !== "DONE" || !(await fileExists(whisperPath))) {
         await updateStep(jobId, segmentIndex, "whisper", "RUNNING");
-        await runWhisperTranslation(audioPath, whisperPath, whisperModel);
+        await runWhisperTranslation(
+          audioPath,
+          whisperPath,
+          whisperModel,
+          transcriptionProvider,
+          cloudProvider
+        );
         await updateStep(jobId, segmentIndex, "whisper", "DONE");
       }
       const rawSrt = await fs.readFile(whisperPath, "utf8");
